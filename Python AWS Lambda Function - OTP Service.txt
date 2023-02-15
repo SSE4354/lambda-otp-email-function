@@ -1,0 +1,176 @@
+DynamoDB Table:
+---------------
+Table Name: otp_holder
+Primary Key: email_id 
+Sort Key: EXPIRATION_TIME
+
+
+
+OTP Generator: generateOtp
+--------------------------
+import json
+import boto3
+import time
+import json
+from random import randint
+
+import datetime as dt
+import dateutil.tz
+
+client_dynamo=boto3.resource('dynamodb')
+
+table=client_dynamo.Table('otp_holder')
+
+default_ttl = 300
+kl = dateutil.tz.gettz('Asia/Kuala_Lumpur')
+date_now = dt.datetime.now(tz=kl)
+
+def lambda_handler(event, context):
+    
+    email_id=event['queryStringParameters']['email']
+    
+    opt_expire_int=int(date_now.timestamp()) + default_ttl
+    otp_value=randint(100000, 999999)
+    opt_expire=dt.datetime.fromtimestamp(opt_expire_int, tz=kl).strftime('%Y-%m-%d %H:%M:%S')
+    
+    entry={
+    'email_id': email_id,
+    'OTP': otp_value,
+    'EXPIRATION_TIME': opt_expire_int
+    }
+    
+    response=table.put_item(Item=entry)
+
+    value = {
+        "success": "true",
+        "status": "generated",
+        "message": "OTP successfully generated",
+        "email": email_id,
+        "otp": otp_value,
+        "opt_expire": opt_expire
+    }
+
+
+    # Dictionary to JSON Object using dumps() method
+    # Return JSON Object
+    return {
+        "statusCode": 200,
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "body": json.dumps(value)
+    }
+
+	
+	
+Send Email: sendOtpEmail
+------------------------
+import json
+import boto3
+import json
+
+client = boto3.client("ses")
+
+
+def lambda_handler(event, context):
+    print(event)
+    if(event['Records'][0]['eventName']=='INSERT'):
+        mail_id=event['Records'][0]['dynamodb']['Keys']['email_id']['S']
+        print("Email : {}".format(mail_id))
+        
+        otp=event['Records'][0]['dynamodb']['NewImage']['OTP']['N']
+        print("OTP : {}".format(otp))
+        
+        body = """
+                Use this OTP to verify your payment at Merchant2U shop.<br>This OTP Valid for 5 minutes. NEVER share this OTP with others.<br><br>
+                
+                OTP : <strong>{}
+             """.format(otp)
+             
+        message = {"Subject": {"Data": 'MyBank2U: OTP Verification'}, "Body": {"Html": {"Data": body}}}
+        
+        #response = client.send_email(Source = 'faizallmdsalleh@gmail.com', Destination = {"ToAddresses": [mail_id]}, Message = message) 
+        
+        print("The mail is sent successfully")
+
+
+		
+Verify OTP: verifyOtp
+---------------------
+import json
+import boto3
+import time
+import json
+client = boto3.client('dynamodb')
+
+def lambda_handler(event, context):
+    # TODO implement
+    
+    email_id=event['queryStringParameters']['email']
+    #print("The received email id : {}".format(email_id))
+    
+    otp_from_user=event['queryStringParameters']['otp']
+    #print("The received otp : {}".format(otp_from_user))
+    
+    response = client.query(
+    TableName='otp_holder',
+    KeyConditionExpression='email_id = :email_id',
+    ExpressionAttributeValues={
+        ':email_id': {'S': email_id}
+    },ScanIndexForward = False, Limit = 1)
+    
+    
+    def responses():
+        
+        if(response['Count']==0):
+            value = {
+                "success": "false",
+                "status": "empty",
+                "message": "OTP not found",
+                "error_code": "1306",
+                "data": ""
+            }            
+        else:
+            latest_stored_otp_value=response['Items'][0]['OTP']['N']
+            #print("Latest Stored OTP Value : {}".format(latest_stored_otp_value))
+            
+            if(int(response['Items'][0]['EXPIRATION_TIME']['N'])<int(time.time())):
+                value = {
+                    "success": "false",
+                    "status": "expired",
+                    "message": "OTP Expired",
+                    "error_code": "1306",
+                    "data": ""
+                }            
+            else:
+                if(latest_stored_otp_value==otp_from_user):
+                    value = {
+                        "success": "true",
+                        "status": "verified",
+                        "message": "OTP Verified",
+                        "data": ""
+                    }
+                else:
+                    value = {
+                        "success": "false",
+                        "status": "mismatched",
+                        "message": "OTP mismatched",
+                        "error_code": "1306",
+                        "data": ""
+                    }   
+                    
+        return value
+            
+    # Dictionary to JSON Object using dumps() method
+    # Return JSON Object
+    # Call Function and Print it.
+    return {
+        "statusCode": 200,
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "body": json.dumps(responses())
+    }
+
+    
+    
